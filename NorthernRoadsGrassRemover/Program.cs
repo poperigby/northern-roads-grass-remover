@@ -2,6 +2,7 @@ using Mutagen.Bethesda;
 using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Noggog;
+using Mutagen.Bethesda.Plugins.Cache;
 
 namespace NorthernRoadsGrassRemover
 {
@@ -29,10 +30,54 @@ namespace NorthernRoadsGrassRemover
                 return;
             }
 
+
             var loadOrderLinkCache = state.LoadOrder.ToImmutableLinkCache();
             var northernRoadsLinkCache = northernRoads.Mod.ToImmutableLinkCache();
 
             // Generate Landscape Texture records without grass, based on the ones defined in TexturesToClean
+            GenerateCleanLandscapeTextures(loadOrderLinkCache, state.PatchMod);
+
+            // Iterate through cells
+            foreach (var cellContext in state.LoadOrder.PriorityOrder.Cell().WinningContextOverrides(loadOrderLinkCache))
+            {
+                // Make sure the cell is exterior
+                if (!cellContext.TryGetParent<IWorldspaceGetter>(out _)) continue;
+
+                // If there are, replace all Landscape Texture records in that cell that are in TexturesToClean with a new Landscape Texture record with no grass
+                Console.WriteLine(HasNorthernRoadsTextures(cellContext.Record, loadOrderLinkCache, northernRoadsLinkCache));
+            }
+        }
+
+        public static bool HasNorthernRoadsTextures(
+            ICellGetter cell,
+            ILinkCache<ISkyrimMod, ISkyrimModGetter> loadOrderLinkCache,
+            ILinkCache<ISkyrimMod, ISkyrimModGetter> northernRoadsLinkCache
+        )
+        {
+            foreach (var previous in cell
+                .ToLinkGetter()
+                .ResolveAllContexts<ISkyrimMod, ISkyrimModGetter, ICell, ICellGetter>(loadOrderLinkCache))
+            {
+                var landscape = previous.Record.Landscape;
+                if (landscape == null) continue;
+
+                foreach (var layer in landscape.Layers)
+                {
+                    if (layer.Header == null) continue;
+
+                    // Check for Northern Roads Landscape Texture records in the cell
+                    if (northernRoadsLinkCache.TryResolve<ILandscapeTextureGetter>(layer.Header.Texture.FormKey, out var landscapeRecord)) return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static Dictionary<String, LandscapeTexture> GenerateCleanLandscapeTextures(
+            ILinkCache<ISkyrimMod, ISkyrimModGetter> loadOrderLinkCache,
+            ISkyrimMod patchMod
+        )
+        {
             Dictionary<String, LandscapeTexture> cleanedLandscapeTextures = new Dictionary<String, LandscapeTexture>();
             foreach (var landscapeTexture in Settings.Value.TexturesToClean)
             {
@@ -44,7 +89,7 @@ namespace NorthernRoadsGrassRemover
                 }
 
                 // Duplicate it
-                var newLandscapeTextureRecord = state.PatchMod.LandscapeTextures.DuplicateInAsNewRecord(landscapeTextureRecord);
+                var newLandscapeTextureRecord = patchMod.LandscapeTextures.DuplicateInAsNewRecord(landscapeTextureRecord);
                 newLandscapeTextureRecord.EditorID = "NR_NoGrass_" + newLandscapeTextureRecord.EditorID;
 
                 // Remove the grass
@@ -53,30 +98,7 @@ namespace NorthernRoadsGrassRemover
                 cleanedLandscapeTextures.Add(landscapeTextureRecord.EditorID, newLandscapeTextureRecord);
             };
 
-            // Iterate through cells
-            foreach (var cellContext in state.LoadOrder.PriorityOrder.Cell().WinningContextOverrides(loadOrderLinkCache))
-            {
-                // Make sure the cell is exterior
-                if (!cellContext.TryGetParent<IWorldspaceGetter>(out _)) continue;
-
-                foreach (var previous in cellContext.Record
-                    .ToLinkGetter()
-                    .ResolveAllContexts<ISkyrimMod, ISkyrimModGetter, ICell, ICellGetter>(state.LinkCache))
-                {
-                    var landscape = previous.Record.Landscape;
-                    if (landscape == null) continue;
-
-                    foreach (var layer in landscape.Layers)
-                    {
-                        if (layer.Header == null) continue;
-
-                        // Check for Northern Roads Landscape Texture records in the cell
-                        if (!northernRoadsLinkCache.TryResolve<ILandscapeGetter>(layer.Header.Texture.FormKey, out var landscapeRecord)) continue;
-
-                        // If there are, replace all Landscape Texture records in that cell that are in TexturesToClean with a new Landscape Texture record with no grass
-                    }
-                }
-            }
+            return cleanedLandscapeTextures;
         }
     }
 }
