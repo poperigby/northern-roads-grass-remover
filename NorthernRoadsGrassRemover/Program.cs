@@ -3,6 +3,7 @@ using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using Noggog;
 using Mutagen.Bethesda.Plugins.Cache;
+using Mutagen.Bethesda.Plugins;
 
 namespace NorthernRoadsGrassRemover
 {
@@ -34,8 +35,11 @@ namespace NorthernRoadsGrassRemover
             var loadOrderLinkCache = state.LoadOrder.ToImmutableLinkCache();
             var northernRoadsLinkCache = northernRoads.Mod.ToImmutableLinkCache();
 
+
             // Generate Landscape Texture records without grass, based on the ones defined in TexturesToClean
-            GenerateCleanLandscapeTextures(loadOrderLinkCache, state.PatchMod);
+            var cleanedLandscapeTextures = GenerateCleanLandscapeTextures(loadOrderLinkCache, state.PatchMod);
+
+            uint patchedTextureCount = 0;
 
             // Iterate through cells
             foreach (var cellContext in state.LoadOrder.PriorityOrder.Cell().WinningContextOverrides(loadOrderLinkCache))
@@ -43,9 +47,36 @@ namespace NorthernRoadsGrassRemover
                 // Make sure the cell is exterior
                 if (!cellContext.TryGetParent<IWorldspaceGetter>(out _)) continue;
 
-                // If there are, replace all Landscape Texture records in that cell that are in TexturesToClean with a new Landscape Texture record with no grass
-                Console.WriteLine(HasNorthernRoadsTextures(cellContext.Record, loadOrderLinkCache, northernRoadsLinkCache));
+                if (HasNorthernRoadsTextures(cellContext.Record, loadOrderLinkCache, northernRoadsLinkCache))
+                {
+                    // Copy the cell
+                    var patchCell = cellContext.GetOrAddAsOverride(state.PatchMod);
+
+                    // Grab the where the Landscape record was first defined, because Landscape records are additive
+                    var originCellRecord = cellContext.Record
+                        .ToLinkGetter()
+                        .ResolveAllContexts<ISkyrimMod, ISkyrimModGetter, ICell, ICellGetter>(loadOrderLinkCache)
+                        .Last();
+
+                    if (originCellRecord.Record.Landscape is null) continue;
+
+                    patchCell.Landscape = originCellRecord.Record.Landscape.DeepCopy();
+
+                    foreach (var layer in patchCell.Landscape.Layers)
+                    {
+                        if (layer.Header == null) continue;
+
+                        var texture = layer.Header.Texture;
+                        if (cleanedLandscapeTextures.ContainsKey(texture.FormKey))
+                        {
+                            layer.Header.Texture.SetTo(cleanedLandscapeTextures[texture.FormKey]);
+                            patchedTextureCount++;
+                        }
+                    }
+                };
             }
+
+            Console.WriteLine($"Patched {patchedTextureCount} Landscape Texture records");
         }
 
         public static bool HasNorthernRoadsTextures(
@@ -54,11 +85,11 @@ namespace NorthernRoadsGrassRemover
             ILinkCache<ISkyrimMod, ISkyrimModGetter> northernRoadsLinkCache
         )
         {
-            foreach (var previous in cell
+            foreach (var version in cell
                 .ToLinkGetter()
                 .ResolveAllContexts<ISkyrimMod, ISkyrimModGetter, ICell, ICellGetter>(loadOrderLinkCache))
             {
-                var landscape = previous.Record.Landscape;
+                var landscape = version.Record.Landscape;
                 if (landscape == null) continue;
 
                 foreach (var layer in landscape.Layers)
@@ -73,12 +104,12 @@ namespace NorthernRoadsGrassRemover
             return false;
         }
 
-        public static Dictionary<String, LandscapeTexture> GenerateCleanLandscapeTextures(
+        public static Dictionary<FormKey, LandscapeTexture> GenerateCleanLandscapeTextures(
             ILinkCache<ISkyrimMod, ISkyrimModGetter> loadOrderLinkCache,
             ISkyrimMod patchMod
         )
         {
-            Dictionary<String, LandscapeTexture> cleanedLandscapeTextures = new Dictionary<String, LandscapeTexture>();
+            Dictionary<FormKey, LandscapeTexture> cleanedLandscapeTextures = new Dictionary<FormKey, LandscapeTexture>();
             foreach (var landscapeTexture in Settings.Value.TexturesToClean)
             {
                 // Search for original version of landscape texture
@@ -95,7 +126,8 @@ namespace NorthernRoadsGrassRemover
                 // Remove the grass
                 newLandscapeTextureRecord.Grasses.Clear();
 
-                cleanedLandscapeTextures.Add(landscapeTextureRecord.EditorID, newLandscapeTextureRecord);
+                // Insert new record into dictionary with the original FormKey as the key
+                cleanedLandscapeTextures.Add(landscapeTextureRecord.FormKey, newLandscapeTextureRecord);
             };
 
             return cleanedLandscapeTextures;
