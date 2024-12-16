@@ -49,18 +49,17 @@ namespace NorthernRoadsGrassRemover
 
                 if (HasNorthernRoadsTextures(cellContext.Record, loadOrderLinkCache, northernRoadsLinkCache))
                 {
-                    // Copy the cell
-                    var patchCell = cellContext.GetOrAddAsOverride(state.PatchMod);
-
-                    // Grab the where the Landscape record was first defined, because Landscape records are additive
-                    var originCellRecord = cellContext.Record
+                    // Grab the cell from the last plugin where the Landscape record was defined
+                    var latestCellContext = cellContext.Record
                         .ToLinkGetter()
                         .ResolveAllContexts<ISkyrimMod, ISkyrimModGetter, ICell, ICellGetter>(loadOrderLinkCache)
-                        .Last();
+                        .FirstOrDefault(context => context.Record?.Landscape != null);
 
-                    if (originCellRecord.Record.Landscape is null) continue;
+                    if (latestCellContext is null || latestCellContext.Record.Landscape is null) continue;
 
-                    patchCell.Landscape = originCellRecord.Record.Landscape.DeepCopy();
+                    // Copy the Cell and Landscape record
+                    var patchCell = cellContext.GetOrAddAsOverride(state.PatchMod);
+                    patchCell.Landscape = latestCellContext.Record.Landscape.DeepCopy();
 
                     foreach (var layer in patchCell.Landscape.Layers)
                     {
